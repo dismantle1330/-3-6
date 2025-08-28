@@ -1,0 +1,376 @@
+import React, { useMemo, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Check, AlertCircle, Clock, ChevronRight, ChevronDown, Mail, Building2, FileText, Users, ExternalLink, TriangleAlert } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+
+// 🧭 說明：
+// 這是一個單檔 React 頁面（可直接放在 Next.js / Vite 專案中）。
+// - 左側：專案與項目清單 + 關鍵篩選
+// - 右側：點選項目後顯示「目前狀態、已確認單位、說明、時程流向圖」
+// - 內建輕量編輯（僅在前端狀態，不含後端儲存）
+// - 114 年的日期顯示同時提供民國/西元對照（簡易換算）
+// - 可依需求接 API / 串接表單
+
+// ====== 型別與工具 ======
+const STATUS_OPTIONS = [
+  { key: "todo", label: "待處理", icon: Clock },
+  { key: "in_progress", label: "處理中", icon: TriangleAlert },
+  { key: "waiting_ext", label: "待對方回覆", icon: Mail },
+  { key: "review", label: "內部審核中", icon: FileText },
+  { key: "done", label: "已完成", icon: Check },
+] as const;
+
+type StatusKey = typeof STATUS_OPTIONS[number]["key"];
+
+type StepKey = "起案" | "草擬" | "內部審核" | "對外溝通" | "待回覆/執行" | "完成";
+
+function statusToStep(status: StatusKey): StepKey {
+  switch (status) {
+    case "todo":
+      return "起案";
+    case "in_progress":
+      return "對外溝通";
+    case "waiting_ext":
+      return "待回覆/執行";
+    case "review":
+      return "內部審核";
+    case "done":
+      return "完成";
+    default:
+      return "起案";
+  }
+}
+
+function rocToGreg(roc: string | null | undefined) {
+  // 期待格式：1140926 / 1140831 之類；回傳 { roc: '1140926', greg: '2025-09-26' }
+  if (!roc) return null;
+  const m = String(roc).match(/^(\d{3})(\d{2})(\d{2})$/);
+  if (!m) return { roc, greg: "格式不符" } as any;
+  const year = 1911 + parseInt(m[1], 10);
+  const month = parseInt(m[2], 10);
+  const day = parseInt(m[3], 10);
+  const mm = month.toString().padStart(2, "0");
+  const dd = day.toString().padStart(2, "0");
+  return { roc, greg: `${year}-${mm}-${dd}` };
+}
+
+// ====== 初始資料（依使用者提供） ======
+const INITIAL_DATA = {
+  projects: [
+    {
+      id: "xinshui1",
+      name: "新水1",
+      items: [
+        {
+          id: "xs1-1",
+          title: "久禾 FeMS 請款單",
+          status: "waiting_ext" as StatusKey,
+          owners: ["歐陽先生", "久禾"],
+          confirmedBy: [],
+          dueRoc: null,
+          note:
+            "對方很忙，可能星期五或下週才會傳；若未傳再提醒。",
+          evidenceLinks: [],
+        },
+        {
+          id: "xs1-2",
+          title: "租船相關文件",
+          status: "in_progress" as StatusKey,
+          owners: ["各中心", "主計"],
+          confirmedBy: ["草擬完成（內部）"],
+          dueRoc: null,
+          note:
+            "文件已草擬，先給各中心預覽並預備提供資料；已詢問主計，主計表示待文簽出來後再給意見。",
+          evidenceLinks: [],
+        },
+        {
+          id: "xs1-3",
+          title: "垃圾處理計畫 + 能源（IAPP/IEE 相關）",
+          status: "waiting_ext" as StatusKey,
+          owners: ["專管", "監造", "船廠", "歐陽先生"],
+          confirmedBy: ["已發 e-mail 告知船廠"],
+          dueRoc: "1140926",
+          note:
+            "協商是否可由專管/監造遠距確認設備位置後代擬供船廠核；對方回覆仍以 114/09/26 提交為準。",
+          evidenceLinks: [
+            { label: "對船廠說明信（e-mail）", href: "#" },
+          ],
+        },
+      ],
+    },
+    {
+      id: "shui3",
+      name: "水3",
+      items: [
+        {
+          id: "s3-1",
+          title: "水三保固順延",
+          status: "review" as StatusKey,
+          owners: ["秘書室"],
+          confirmedBy: ["水3 便簽已完成"],
+          dueRoc: null,
+          note: "已送秘書室審閱，便簽完成。",
+          evidenceLinks: [],
+        },
+      ],
+    },
+    {
+      id: "shui6",
+      name: "水6",
+      items: [
+        {
+          id: "s6-1",
+          title: "林員電子郵件騷擾知洋（公文/簽）",
+          status: "review" as StatusKey,
+          owners: ["林員"],
+          confirmedBy: [],
+          dueRoc: null,
+          note: "待林員明日簽核。",
+          evidenceLinks: [],
+        },
+        {
+          id: "s6-2",
+          title: "水6 保養設備（急辦）",
+          status: "in_progress" as StatusKey,
+          owners: ["水6 船員", "水3 輪機"],
+          confirmedBy: ["文存完成", "已發 e-mail 通知立即保養"],
+          dueRoc: null,
+          note: "水3 輪機需熟讀手冊後執行保養。",
+          evidenceLinks: [
+            { label: "通知 e-mail", href: "#" },
+            { label: "保養手冊（內部）", href: "#" },
+          ],
+        },
+        {
+          id: "s6-3a",
+          title: "水6 保固 1–52 項（專管要求補件）",
+          status: "review" as StatusKey,
+          owners: ["秘書室", "東部"],
+          confirmedBy: ["東部會議已完成"],
+          dueRoc: "1140831",
+          note:
+            "專管來函指我們提供資料不足；目前公文在秘書室。因東部常遺失文件，已另行 e-mail 請東部提供 26 項依據，並請於 114/08/31 前回覆。",
+          evidenceLinks: [
+            { label: "專管來函", href: "#" },
+            { label: "致東部催辦 e-mail", href: "#" },
+          ],
+        },
+        {
+          id: "s6-3b",
+          title: "催船廠提供 53–98 項保固認定",
+          status: "review" as StatusKey,
+          owners: ["副座", "主秘", "訊拓", "船廠"],
+          confirmedBy: ["已以 e-mail 催辦"],
+          dueRoc: null,
+          note:
+            "目前文件至副座，回閱主秘；並已向訊拓及船廠催促提交統整。",
+          evidenceLinks: [
+            { label: "催辦 e-mail（對船廠/訊拓）", href: "#" },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+// ====== UI 子元件 ======
+const StatusBadge: React.FC<{ status: StatusKey }> = ({ status }) => {
+  const def = STATUS_OPTIONS.find((s) => s.key === status)!;
+  const Icon = def.icon;
+  const tone = {
+    todo: "bg-gray-100 text-gray-700",
+    in_progress: "bg-amber-100 text-amber-800",
+    waiting_ext: "bg-blue-100 text-blue-800",
+    review: "bg-purple-100 text-purple-800",
+    done: "bg-emerald-100 text-emerald-800",
+  }[status];
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-1 text-xs rounded-full ${tone}`}>
+      <Icon className="h-3.5 w-3.5" /> {def.label}
+    </span>
+  );
+};
+
+const FlowViz: React.FC<{ current: StepKey }> = ({ current }) => {
+  const steps: StepKey[] = ["起案", "草擬", "內部審核", "對外溝通", "待回覆/執行", "完成"];
+  const idx = steps.indexOf(current);
+  return (
+    <div className="w-full">
+      <div className="flex items-center justify-between gap-2">
+        {steps.map((s, i) => (
+          <div key={s} className="flex-1">
+            <div className={`h-2 rounded-full ${i <= idx ? "bg-emerald-500" : "bg-gray-200"}`}></div>
+            <div className="mt-2 flex items-center gap-2">
+              <div className={`h-6 w-6 rounded-full flex items-center justify-center text-white ${i <= idx ? "bg-emerald-500" : "bg-gray-300"}`}>
+                {i < idx ? <Check className="h-4 w-4" /> : i === idx ? <Clock className="h-4 w-4" /> : <></>}
+              </div>
+              <span className={`text-sm ${i === idx ? "font-semibold" : "text-gray-600"}`}>{s}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ItemCard: React.FC<{
+  projectName: string;
+  item: any;
+  onUpdate: (patch: Partial<any>) => void;
+}> = ({ projectName, item, onUpdate }) => {
+  const [open, setOpen] = useState(true);
+  const step = statusToStep(item.status as StatusKey);
+  const due = rocToGreg(item.dueRoc);
+
+  return (
+    <Card className="shadow-sm border border-gray-200">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <CardTitle className="text-base font-semibold leading-6 flex items-center gap-2">
+              <span className="px-2 py-1 text-xs rounded-md bg-gray-50">{projectName}</span>
+              {item.title}
+            </CardTitle>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <StatusBadge status={item.status} />
+              {due && (
+                <Badge variant="secondary" className="bg-gray-100">到期：民國 {due.roc}（西元 {due.greg}）</Badge>
+              )}
+              {item.confirmedBy?.map((c: string, i: number) => (
+                <Badge key={i} variant="outline" className="border-emerald-300 text-emerald-700">已確認：{c}</Badge>
+              ))}
+            </div>
+          </div>
+          <Button variant="ghost" className="h-8 px-2" onClick={() => setOpen(!open)}>
+            {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          </Button>
+        </div>
+      </CardHeader>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
+            <CardContent className="pt-0">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="md:col-span-2 space-y-4">
+                  <div>
+                    <div className="text-sm text-gray-500 mb-1">說明</div>
+                    <Textarea
+                      value={item.note}
+                      onChange={(e) => onUpdate({ note: e.target.value })}
+                      className="min-h-[88px]"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-sm text-gray-500">負責/相關單位：</div>
+                    {item.owners?.map((o: string, i: number) => (
+                      <Badge key={i} className="bg-sky-50 text-sky-800 border border-sky-200" variant="outline"><Building2 className="h-3 w-3 mr-1" />{o}</Badge>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-sm text-gray-500">佐證/附件：</div>
+                    {item.evidenceLinks?.length ? (
+                      item.evidenceLinks.map((l: any, i: number) => (
+                        <a key={i} href={l.href} className="inline-flex items-center gap-1 text-sm underline hover:no-underline">
+                          {l.label} <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      ))
+                    ) : (
+                      <span className="text-sm text-gray-400">—</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <div className="text-sm text-gray-500 mb-1">目前階段</div>
+                    <FlowViz current={step} />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-sm text-gray-500">快速更新</div>
+                    <div className="flex flex-wrap gap-2">
+                      {STATUS_OPTIONS.map((opt) => (
+                        <Button key={opt.key} variant={item.status === opt.key ? "default" : "outline"} size="sm" onClick={() => onUpdate({ status: opt.key })}>
+                          <opt.icon className="h-3.5 w-3.5 mr-1" /> {opt.label}
+                        </Button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        placeholder="民國日期（如 1140926）"
+                        value={item.dueRoc ?? ""}
+                        onChange={(e) => onUpdate({ dueRoc: e.target.value || null })}
+                      />
+                      <Badge variant="secondary">自動換算西元</Badge>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </Card>
+  );
+};
+
+// ====== 主頁面 ======
+export default function Dashboard() {
+  const [query, setQuery] = useState("");
+  const [data, setData] = useState(INITIAL_DATA);
+  const allItems = useMemo(() => data.projects.flatMap((p: any) => p.items.map((it: any) => ({ ...it, projectId: p.id, projectName: p.name }))), [data]);
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return allItems;
+    return allItems.filter((it: any) =>
+      [it.title, it.projectName, it.note, ...(it.owners || []), ...(it.confirmedBy || [])]
+        .join("\n")
+        .toLowerCase()
+        .includes(query.toLowerCase())
+    );
+  }, [allItems, query]);
+
+  function patchItem(id: string, patch: Partial<any>) {
+    setData((prev: any) => ({
+      projects: prev.projects.map((p: any) => ({
+        ...p,
+        items: p.items.map((it: any) => (it.id === id ? { ...it, ...patch } : it)),
+      })),
+    }));
+  }
+
+  return (
+    <div className="p-6 md:p-10 max-w-6xl mx-auto">
+      <div className="mb-6">
+        <h1 className="text-2xl md:text-3xl font-bold tracking-tight">專案儀表板｜新水1・水3・水6</h1>
+        <p className="text-sm text-gray-600 mt-2">點選任一項目可查看「目前狀態、已確認單位、說明、附件」；右側顯示進度流向（起案→完成）。此頁僅為前端展示，可日後接後端或匯出報表。</p>
+      </div>
+
+      <div className="mb-4 flex items-center gap-3">
+        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜尋：輸入關鍵字、單位、项目名稱…" />
+        <Badge variant="outline" className="text-gray-700">目前共 {filtered.length} 項</Badge>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4">
+        {filtered.map((it: any) => (
+          <ItemCard
+            key={it.id}
+            projectName={it.projectName}
+            item={it}
+            onUpdate={(patch) => patchItem(it.id, patch)}
+          />
+        ))}
+      </div>
+
+      <footer className="mt-10 text-xs text-gray-500">
+        提示：民國→西元僅為簡易換算（+1911）。實際截止日仍以正式文簽為準。
+      </footer>
+    </div>
+  );
+}
